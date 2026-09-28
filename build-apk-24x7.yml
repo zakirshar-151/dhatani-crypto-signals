@@ -1,0 +1,316 @@
+name: Build Dhatani Crypto Signals APK 24x7
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Setup Android SDK
+        run: |
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
+          yes | sdkmanager --licenses || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Create Android project
+        shell: bash
+        run: |
+          mkdir -p app/src/main/java/com/dhatani/cryptosignals
+          mkdir -p app/src/main/res/values
+          mkdir -p app/src/main/res/drawable
+          mkdir -p app/src/main/assets
+          cp index.html app/src/main/assets/index.html
+
+          cat > settings.gradle <<'GRADLE'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "DhataniCryptoSignals"
+          include(":app")
+          GRADLE
+
+          cat > build.gradle <<'GRADLE'
+          plugins { id 'com.android.application' version '8.13.0' apply false }
+          GRADLE
+
+          cat > gradle.properties <<'GRADLE'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          GRADLE
+
+          cat > app/build.gradle <<'GRADLE'
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'com.dhatani.cryptosignals'
+              compileSdk 35
+              defaultConfig {
+                  applicationId 'com.dhatani.cryptosignals'
+                  minSdk 23
+                  targetSdk 35
+                  versionCode 2
+                  versionName '2.0-24x7'
+              }
+          }
+          GRADLE
+
+          cat > app/src/main/res/values/styles.xml <<'XML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+                  <item name="android:fontFamily">sans</item>
+                  <item name="android:colorAccent">#00e5ff</item>
+                  <item name="android:navigationBarColor">#07111f</item>
+                  <item name="android:statusBarColor">#07111f</item>
+              </style>
+          </resources>
+          XML
+
+          cat > app/src/main/res/drawable/ic_launcher.xml <<'XML'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+              <path android:fillColor="#07111F" android:pathData="M0,0h108v108h-108z" />
+              <path android:fillColor="#F5C64F" android:pathData="M18,8h72c5.5,0 10,4.5 10,10v72c0,5.5 -4.5,10 -10,10h-72c-5.5,0 -10,-4.5 -10,-10v-72c0,-5.5 4.5,-10 10,-10z" />
+              <path android:strokeColor="#07111F" android:strokeWidth="5" android:strokeLineCap="square" android:fillColor="@android:color/transparent" android:pathData="M32,32 L32,76 M32,32 L45,32 C55,32 60,40 60,54 C60,68 55,76 45,76 L32,76" />
+              <path android:strokeColor="#07111F" android:strokeWidth="5" android:strokeLineCap="square" android:fillColor="@android:color/transparent" android:pathData="M82,39 C79,34 75,32 70,32 C62,32 58,40 58,54 C58,68 62,76 70,76 C75,76 79,74 82,69" />
+          </vector>
+          XML
+
+          cat > app/src/main/AndroidManifest.xml <<'XML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+              <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+              <application android:allowBackup="true" android:label="Dhatani Crypto Signals" android:icon="@drawable/ic_launcher" android:theme="@style/AppTheme" android:usesCleartextTraffic="true">
+                  <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <service android:name=".SignalMonitorService" android:exported="false" android:stopWithTask="false" android:foregroundServiceType="specialUse">
+                      <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="continuous real-time crypto signal monitoring and alerts" />
+                  </service>
+                  <receiver android:name=".BootReceiver" android:enabled="true" android:exported="false">
+                      <intent-filter>
+                          <action android:name="android.intent.action.BOOT_COMPLETED" />
+                          <action android:name="android.net.conn.CONNECTIVITY_CHANGE" />
+                      </intent-filter>
+                  </receiver>
+              </application>
+          </manifest>
+          XML
+
+          cat > app/src/main/java/com/dhatani/cryptosignals/MainActivity.java <<'JAVA'
+          package com.dhatani.cryptosignals;
+
+          import android.Manifest;
+          import android.app.Activity;
+          import android.content.*;
+          import android.content.pm.PackageManager;
+          import android.net.Uri;
+          import android.os.*;
+          import android.provider.Settings;
+          import android.webkit.*;
+
+          public class MainActivity extends Activity {
+              private WebView webView;
+              private static final int NOTIFICATION_REQ = 9001;
+
+              @Override public void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  webView = new WebView(this);
+                  setContentView(webView);
+                  WebSettings s = webView.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  s.setDatabaseEnabled(true);
+                  s.setAllowFileAccess(true);
+                  s.setAllowContentAccess(true);
+                  s.setLoadWithOverviewMode(false);
+                  s.setUseWideViewPort(true);
+                  s.setCacheMode(WebSettings.LOAD_DEFAULT);
+                  if (Build.VERSION.SDK_INT >= 21) s.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+                  webView.setWebViewClient(new WebViewClient());
+                  webView.loadUrl("file:///android_asset/index.html");
+                  requestNotificationPermission();
+                  startSignalService();
+                  requestBatteryExemption();
+              }
+
+              private void requestNotificationPermission() {
+                  if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                      requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, NOTIFICATION_REQ);
+              }
+
+              private void startSignalService() {
+                  Intent i = new Intent(this, SignalMonitorService.class);
+                  if (Build.VERSION.SDK_INT >= 26) startForegroundService(i); else startService(i);
+              }
+
+              private void requestBatteryExemption() {
+                  try {
+                      if (Build.VERSION.SDK_INT >= 23) {
+                          PowerManager pm = (PowerManager)getSystemService(POWER_SERVICE);
+                          if (!pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                              Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                              i.setData(Uri.parse("package:" + getPackageName()));
+                              startActivity(i);
+                          }
+                      }
+                  } catch (Exception ignored) {}
+              }
+
+              @Override public void onBackPressed() {
+                  if (webView.canGoBack()) webView.goBack(); else super.onBackPressed();
+              }
+          }
+          JAVA
+
+          cat > app/src/main/java/com/dhatani/cryptosignals/SignalMonitorService.java <<'JAVA'
+          package com.dhatani.cryptosignals;
+
+          import android.app.*;
+          import android.content.*;
+          import android.content.pm.ServiceInfo;
+          import android.os.*;
+          import org.json.*;
+          import java.io.*;
+          import java.net.*;
+
+          public class SignalMonitorService extends Service {
+              private static final String CHANNEL="dhatani_alerts";
+              private static final int ID=7001;
+              private static final String BASE="https://dhatani-cloud-bot-live-production.up.railway.app";
+              private final Handler handler=new Handler(Looper.getMainLooper());
+              private Runnable poller;
+              private PowerManager.WakeLock wakeLock;
+
+              @Override public void onCreate(){
+                  super.onCreate();
+                  createChannel();
+                  PowerManager pm=(PowerManager)getSystemService(POWER_SERVICE);
+                  wakeLock=pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"Dhatani:SignalMonitor");
+                  wakeLock.setReferenceCounted(false);
+                  try{wakeLock.acquire();}catch(Exception ignored){}
+                  startAsForeground();
+                  poller=()->{poll(); handler.postDelayed(poller,15000);};
+                  handler.post(poller);
+              }
+
+              private void startAsForeground(){
+                  Intent open=new Intent(this,MainActivity.class);
+                  PendingIntent pi=PendingIntent.getActivity(this,1,open,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+                  Notification n=new Notification.Builder(this,CHANNEL)
+                      .setSmallIcon(R.drawable.ic_launcher)
+                      .setContentTitle("Dhatani Crypto Signals")
+                      .setContentText("24/7 signal monitor is running")
+                      .setOngoing(true).setCategory(Notification.CATEGORY_SERVICE).setContentIntent(pi).build();
+                  if(Build.VERSION.SDK_INT>=34) startForeground(ID,n,ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+                  else startForeground(ID,n);
+              }
+
+              private void createChannel(){
+                  if(Build.VERSION.SDK_INT>=26){
+                      NotificationChannel c=new NotificationChannel(CHANNEL,"Dhatani Signal Alerts",NotificationManager.IMPORTANCE_HIGH);
+                      c.setDescription("Entry, TP1, TP2, TP3, SL and signal status alerts");
+                      ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).createNotificationChannel(c);
+                  }
+              }
+
+              private void poll(){
+                  new Thread(()->{
+                      HttpURLConnection c=null;
+                      try{
+                          URL u=new URL(BASE+"/api/signals?ts="+System.currentTimeMillis());
+                          c=(HttpURLConnection)u.openConnection();
+                          c.setConnectTimeout(10000); c.setReadTimeout(10000); c.setUseCaches(false);
+                          if(c.getResponseCode()!=200)return;
+                          BufferedReader br=new BufferedReader(new InputStreamReader(c.getInputStream()));
+                          StringBuilder b=new StringBuilder(); String line; while((line=br.readLine())!=null)b.append(line); br.close();
+                          JSONObject root=new JSONObject(b.toString());
+                          JSONArray alerts=root.optJSONArray("alerts");
+                          if(alerts!=null){
+                              for(int i=0;i<alerts.length();i++){
+                                  JSONObject a=alerts.optJSONObject(i); if(a==null)continue;
+                                  String id=a.optString("id","");
+                                  if(id.length()>0 && markIfNew(id)) notifyAlert("Dhatani · "+a.optString("type","SIGNAL"),a.optString("message","Signal update"));
+                              }
+                          }
+                      }catch(Exception ignored){} finally{if(c!=null)c.disconnect();}
+                  }).start();
+              }
+
+              private boolean markIfNew(String id){
+                  SharedPreferences p=getSharedPreferences("alerts",MODE_PRIVATE);
+                  if(p.getBoolean(id,false))return false;
+                  p.edit().putBoolean(id,true).apply(); return true;
+              }
+
+              private void notifyAlert(String title,String body){
+                  Intent open=new Intent(this,MainActivity.class);
+                  PendingIntent pi=PendingIntent.getActivity(this,2,open,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+                  Notification n=new Notification.Builder(this,CHANNEL)
+                      .setSmallIcon(R.drawable.ic_launcher)
+                      .setContentTitle(title).setContentText(body)
+                      .setStyle(new Notification.BigTextStyle().bigText(body))
+                      .setAutoCancel(true).setContentIntent(pi).setCategory(Notification.CATEGORY_EVENT).setPriority(Notification.PRIORITY_HIGH).build();
+                  ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).notify((int)(System.currentTimeMillis()%1000000),n);
+              }
+
+              @Override public int onStartCommand(Intent intent,int flags,int startId){ startAsForeground(); return START_STICKY; }
+              @Override public void onDestroy(){ handler.removeCallbacksAndMessages(null); try{if(wakeLock!=null&&wakeLock.isHeld())wakeLock.release();}catch(Exception ignored){}; super.onDestroy(); }
+              @Override public IBinder onBind(Intent intent){return null;}
+          }
+          JAVA
+
+          cat > app/src/main/java/com/dhatani/cryptosignals/BootReceiver.java <<'JAVA'
+          package com.dhatani.cryptosignals;
+          import android.content.*;
+          import android.os.Build;
+          public class BootReceiver extends BroadcastReceiver {
+              @Override public void onReceive(Context c, Intent i){
+                  String a=i.getAction();
+                  if(Intent.ACTION_BOOT_COMPLETED.equals(a)||"android.net.conn.CONNECTIVITY_CHANGE".equals(a)){
+                      Intent s=new Intent(c,SignalMonitorService.class);
+                      try{if(Build.VERSION.SDK_INT>=26)c.startForegroundService(s);else c.startService(s);}catch(Exception ignored){}
+                  }
+              }
+          }
+          JAVA
+
+      - name: Build APK
+        run: gradle assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dhatani-Crypto-Signals-APK-24x7
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
