@@ -6960,11 +6960,11 @@ setTimeout(renderAdaptiveIndicatorLab,150);
   </div>
   <div id="daiSettings" class="dai-settings">
     <div class="dai-grid">
-      <select id="daiModel" class="dai-select"><option value="gpt-5.6-sol">GPT-5.6 Sol · Accuracy</option><option value="gpt-5.6-luna">GPT-5.6 Luna · Fast</option></select>
+      <select id="daiModel" class="dai-select"><option value="">⚡ Automatic · Fast</option><option value="gpt-5.6-luna">GPT-5.6 Luna · Fast</option></select>
       <select id="daiApplyMode" class="dai-select"><option value="confirm">Ask before changing settings</option><option value="auto">Auto-apply safe settings</option></select>
     </div>
     <div class="dai-tools"><button class="dai-btn" type="button" onclick="dhataniAI.sendCommand('Audit the current app settings and signal engine. Identify concrete accuracy improvements without placing trades.')">🧠 Audit Accuracy</button><button class="dai-btn" type="button" onclick="dhataniAI.sendCommand('Review the current app UI and make it more compact and mobile-safe. Suggest only safe UI changes.')">📱 UI Review</button></div>
-    <div class="dai-note">No local message cap. API access requires your own backend/API billing. Never put an API key directly in this HTML.</div>
+    <div class="dai-tools" style="margin-top:8px"><button class="dai-btn gold" type="button" onclick="dhataniAI.signInChatGPT()">🔐 Continue with ChatGPT</button><button class="dai-btn" type="button" onclick="dhataniAI.checkChatGPT()">🔄 Check connection</button></div><div id="daiChatGPTStatus" class="dai-note">ChatGPT plan mode: Not connected.</div><div class="dai-note">Uses the official local Sign in with ChatGPT flow. No OpenAI API key is stored in this HTML.</div>
   </div>
   <div id="daiBody" class="dai-body"></div>
   <div class="dai-compose">
@@ -6990,11 +6990,68 @@ setTimeout(renderAdaptiveIndicatorLab,150);
  function renderFiles(){const a=$('daiAttach');a.innerHTML=state.files.map((f,i)=>`<div class="dai-file"><span>${f.type?.startsWith('video/')?'🎥':f.type?.startsWith('image/')?'🖼️':'📄'} ${esc(f.name)}</span><button class="dai-btn" style="padding:3px 7px;margin-left:auto" onclick="dhataniAI.removeFile(${i})">✕</button></div>`).join('')}
  async function videoPreview(file){return new Promise(resolve=>{try{const v=document.createElement('video');v.muted=true;v.playsInline=true;v.preload='metadata';const u=URL.createObjectURL(file);v.src=u;v.onloadeddata=()=>{try{v.currentTime=Math.min(1,v.duration||0)}catch(e){}};v.onseeked=()=>{try{const c=document.createElement('canvas');c.width=640;c.height=Math.round(640*(v.videoHeight||360)/(v.videoWidth||640));c.getContext('2d').drawImage(v,0,0,c.width,c.height);resolve(c.toDataURL('image/jpeg',.75))}catch(e){resolve(null)}finally{URL.revokeObjectURL(u)}};v.onerror=()=>{URL.revokeObjectURL(u);resolve(null)}}catch(e){resolve(null)}})}
  async function addFiles(list){for(const f of [...list]){if(f.size>100*1024*1024){addMsg('ai','⚠️ '+f.name+' is over 100 MB and was skipped.');continue}state.files.push(f);if(f.type.startsWith('video/')){const p=await videoPreview(f);if(p) f._preview=p;}}renderFiles();$('daiStatus').textContent=state.files.length+' attachment(s) ready';}
- async function send(text){const input=$('daiInput');text=(text??input.value).trim();if(!text&&!state.files.length)return;const files=state.files.slice();if(input.value)input.value='';addMsg('user',(text||'Attached files')+(files.length?'\n📎 '+files.map(f=>f.name).join(', '):''));$('daiStatus').textContent='Dhatani AI is analyzing…';const fd=new FormData();fd.append('message',text||'Analyze the attached material.');fd.append('model',$('daiModel')?.value||'gpt-5.6-sol');fd.append('applyMode',$('daiApplyMode')?.value||'confirm');fd.append('appState',JSON.stringify(appSnapshot()));files.forEach(f=>fd.append('files',f,f.name));for(const f of files){if(f._preview)fd.append('video_preview',f._preview,f.name+'.jpg')}try{const r=await fetch('/api/dhatani-ai',{method:'POST',body:fd});const data=await r.json();if(!r.ok)throw new Error(data.error||('HTTP '+r.status));addMsg('ai',data.reply||'No response.');if(Array.isArray(data.actions)&&data.actions.length){const a=addMsg('ai','Suggested app actions:\n'+data.actions.map((x,i)=>(i+1)+'. '+x.label).join('\n'));data.actions.forEach(x=>{const wrap=document.createElement('div');wrap.className='dai-action';wrap.innerHTML='<b>'+esc(x.label)+'</b><br><small>'+esc(x.reason||'')+'</small>';if(x.safe!==false){const b=document.createElement('button');b.className='dai-btn gold';b.textContent='Apply';b.onclick=()=>applyAction(x);wrap.appendChild(b)}else{const s=document.createElement('span');s.className='dai-chip';s.textContent='Manual review';wrap.appendChild(s)}a.appendChild(wrap)});$('daiBody').scrollTop=$('daiBody').scrollHeight}$('daiStatus').textContent='Ready';}catch(e){addMsg('ai','❌ AI connection error: '+e.message+'\n\nMake sure /api/dhatani-ai is deployed and OPENAI_API_KEY is configured on the server.');$('daiStatus').textContent='Connection error';}}
- function applyAction(a){try{if(a.type==='set_localStorage'){localStorage.setItem(a.key,typeof a.value==='string'?a.value:JSON.stringify(a.value));location.reload();return}if(a.type==='call_function'&&typeof window[a.function]==='function'){window[a.function](...(a.args||[]));return}if(a.type==='set_input'){const e=$(a.id);if(e){e.value=a.value;e.dispatchEvent(new Event('input',{bubbles:true}));}return}addMsg('ai','⚠️ Action not recognized; nothing was changed.')}catch(e){addMsg('ai','❌ Could not apply action: '+e.message)}}
- window.dhataniAI={toggle(){state.open=!state.open;$('dhataniAiPanel').classList.toggle('open',state.open);if(state.open&&!state.history.length){addMsg('ai','Assalam-o-Alaikum 👋 I am Dhatani AI. I can inspect your signals, indicator settings and app state, review files/images, and suggest or apply safe app-setting changes. I will not place trades.');state.history.push(1)}},close(){state.open=false;$('dhataniAiPanel').classList.remove('open')},toggleSettings(){$('daiSettings').classList.toggle('open')},addFiles,removeFile(i){state.files.splice(i,1);renderFiles()},clearFiles(){state.files=[];renderFiles();$('daiStatus').textContent='Attachments cleared'},clearChat(){$('daiBody').innerHTML='';state.history=[];this.toggle()},send:()=>send(),sendCommand:t=>send(t)};
+ async function fileDataUrl(file){return await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(file)})}
+ function fastLocalReply(message){
+   const q=String(message||'').toLowerCase().trim();
+   if(!q || typeof signals==='undefined' || !Array.isArray(signals)) return null;
+   const all=signals.slice();
+   const active=all.filter(s=>String(s.status||'').toUpperCase()==='ACTIVE');
+   const pending=all.filter(s=>String(s.status||'').toUpperCase()==='PENDING');
+   const closed=all.filter(s=>/^(WIN|LOSS)$/.test(String(s.status||'').toUpperCase()));
+   const total=all.length;
+   const wantActive=/\b(active|currently active|live signals?)\b/.test(q) && !/pending/.test(q);
+   const wantPending=/\b(pending|waiting)\b/.test(q);
+   const wantClosed=/\b(closed|history|completed|win loss)\b/.test(q);
+   const wantTotal=/\b(total|how many|count|numbers?|summary|overview)\b/.test(q);
+   const wantSettings=/\b(indicator|indicators|settings|configuration|configs?)\b/.test(q);
+   if(!(wantActive||wantPending||wantClosed||wantTotal||wantSettings)) return null;
+   if(wantSettings && !wantActive && !wantPending && !wantClosed && !wantTotal){
+     const keys=['indicatorConfigs','indicatorStats','settings','dhataniSettings'];
+     const parts=[];
+     for(const k of keys){try{const v=localStorage.getItem(k);if(v!=null){const x=JSON.parse(v);parts.push(k+': '+JSON.stringify(x).slice(0,1800));}}catch(e){}}
+     return parts.length?'⚡ Instant local result\n\nIndicator/settings data found:\n'+parts.join('\n\n'):'⚡ Instant local result\n\nNo saved indicator/settings data was found in this browser.';
+   }
+   const list=wantActive?active:wantPending?pending:wantClosed?closed:[];
+   let out='⚡ Instant local result\n\n';
+   if(wantTotal) out+=`📊 Total: ${total}\n🟢 Active: ${active.length}\n🟡 Pending: ${pending.length}\n🔵 Closed: ${closed.length}\n\n`;
+   if(wantActive) out+=`🟢 Active signals: ${active.length}\n\n`+formatSignalList(list);
+   else if(wantPending) out+=`🟡 Pending signals: ${pending.length}\n\n`+formatSignalList(list);
+   else if(wantClosed) out+=`🔵 Closed signals: ${closed.length}\n\n`+formatSignalList(list.slice(0,30));
+   if(wantTotal && !wantActive && !wantPending && !wantClosed) out+='⚡ This summary was generated directly from the app data — no ChatGPT request was needed.';
+   return out.trim();
+ }
+ function formatSignalList(list){
+   if(!list.length) return 'None.';
+   return list.slice(0,30).map((s,i)=>{
+     const coin=s.coin||s.symbol||'Unknown';
+     const dir=s.dir||s.direction||'—';
+     const market=s.market||s.exchange||'—';
+     const entry=Number(s.entry);
+     const current=Number(s.currentPrice);
+     const move=(Number.isFinite(entry)&&entry>0&&Number.isFinite(current)&&current>0)?(((current-entry)/entry)*100*(String(dir).toUpperCase()==='SHORT'?-1:1)).toFixed(2)+'%':'—';
+     return `${i+1}. ${coin} — ${dir}\n   Market: ${market} · Status: ${s.status||'—'}\n   Entry: ${Number.isFinite(entry)?entry:'—'} · Current: ${Number.isFinite(current)?current:'—'} · Move: ${move}\n   SL: ${s.sl??'—'} · TP1/TP2/TP3: ${s.tp1??'—'} / ${s.tp2??'—'} / ${s.tp3??'—'}\n   Grade: ${s.grade||'—'} · Horizon: ${s.horizon||'—'}`;
+   }).join('\n\n')+(list.length>30?`\n\n… and ${list.length-30} more.`:'');
+ }
+ async function send(text){
+   const input=$('daiInput');text=(text??input.value).trim();if(!text&&!state.files.length)return;
+   const files=state.files.slice();if(input.value)input.value='';addMsg('user',(text||'Attached files')+(files.length?'\n📎 '+files.map(f=>f.name).join(', '):''));
+   const instant=files.length===0?fastLocalReply(text):null;
+   if(instant){ addMsg('ai',instant); $('daiStatus').textContent='Ready · Instant local response'; return; }
+   $('daiStatus').textContent='Dhatani AI is analyzing…';
+   const attachments=[];
+   for(const f of files){const item={name:f.name,type:f.type,size:f.size};if(f.type.startsWith('image/')){try{item.data=await fileDataUrl(f)}catch(e){}}else if(f._preview){item.preview=f._preview}attachments.push(item)}
+   try{
+     const r=await fetch('/api/dhatani-ai-siwc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text||'Analyze the attached material.',model:$('daiModel')?.value||'',applyMode:$('daiApplyMode')?.value||'confirm',appState:appSnapshot(),attachments})});
+     const data=await r.json();if(!r.ok)throw new Error(data.error||('HTTP '+r.status));addMsg('ai',data.reply||'No response.');
+     if(Array.isArray(data.actions)&&data.actions.length){const a=addMsg('ai','Suggested app actions:\n'+data.actions.map((x,i)=>(i+1)+'. '+x.label).join('\n'));data.actions.forEach(x=>{const wrap=document.createElement('div');wrap.className='dai-action';wrap.innerHTML='<b>'+esc(x.label)+'</b><br><small>'+esc(x.reason||'')+'</small>';if(x.safe!==false){const b=document.createElement('button');b.className='dai-btn gold';b.textContent='Apply';b.onclick=()=>applyAction(x);wrap.appendChild(b)}else{const ss=document.createElement('span');ss.className='dai-chip';ss.textContent='Manual review';wrap.appendChild(ss)}a.appendChild(wrap)});$('daiBody').scrollTop=$('daiBody').scrollHeight}
+     $('daiStatus').textContent='Ready';
+   }catch(e){addMsg('ai','❌ ChatGPT connection error: '+e.message+'\n\nTap 🔐 Continue with ChatGPT and approve ChatGPT plan usage.');$('daiStatus').textContent='Connection error';}
+ }
+ function applyAction(a){try{const allowed=['indicatorConfigs','dhataniSettings','signalGroups','groups','settings'];if(a.type==='set_localStorage'&&allowed.includes(a.key)){localStorage.setItem(a.key,typeof a.value==='string'?a.value:JSON.stringify(a.value));location.reload();return}if(a.type==='call_function'&&typeof window[a.function]==='function'){window[a.function](...(a.args||[]));return}if(a.type==='set_input'){const e=$(a.id);if(e){e.value=a.value;e.dispatchEvent(new Event('input',{bubbles:true}));}return}addMsg('ai','⚠️ Action not recognized; nothing was changed.')}catch(e){addMsg('ai','❌ Could not apply action: '+e.message)}}
+ async function checkChatGPT(){try{const r=await fetch('/auth/status',{cache:'no-store'});const d=await r.json();const el=$('daiChatGPTStatus');if(d.connected){el.textContent='✅ ChatGPT connected: '+(d.email||'account')+' • Plan usage: '+(d.sharing?'enabled':'not enabled');$('daiStatus').textContent=d.sharing?'ChatGPT plan connected':'ChatGPT connected — plan permission not enabled'}else{el.textContent='ChatGPT plan mode: Not connected. Tap Continue with ChatGPT.'}}catch(e){$('daiChatGPTStatus').textContent='ℹ️ Start the local Dhatani server first, then open http://127.0.0.1:1455.'}}
+ function signInChatGPT(){location.href='/auth/start'}
+ window.dhataniAI={toggle(){state.open=!state.open;$('dhataniAiPanel').classList.toggle('open',state.open);if(state.open&&!state.history.length){addMsg('ai','Assalam-o-Alaikum 👋 I am Dhatani AI. I can inspect your signals, indicator settings and app state, review files/images, and suggest or apply safe app-setting changes. I will not place trades.');state.history.push(1);checkChatGPT()}},close(){state.open=false;$('dhataniAiPanel').classList.remove('open')},toggleSettings(){$('daiSettings').classList.toggle('open')},addFiles,removeFile(i){state.files.splice(i,1);renderFiles()},clearFiles(){state.files=[];renderFiles();$('daiStatus').textContent='Attachments cleared'},clearChat(){$('daiBody').innerHTML='';state.history=[]},send:()=>send(),sendCommand:t=>send(t),signInChatGPT,checkChatGPT};
  $('daiInput')?.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();send()}});
 })();
-
 </script>
 </body></html>
