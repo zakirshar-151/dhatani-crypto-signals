@@ -43,28 +43,25 @@ jobs:
           cp index.html app/src/main/assets/index.html
 
           # Fix imported historical signal records that have no explicit exchange field.
-          # Uploaded sheet records are valid Dhatani records; treat them as Binance
-          # for exchange filtering so bundled historical data is visible on first install.
           python3 - <<'PY'
           from pathlib import Path
           p = Path('app/src/main/assets/index.html')
           s = p.read_text(encoding='utf-8')
+
           old = "function signalExchangeOf(s){const e=String(s?.exchange||s?.exchangeName||s?.venue||'').toUpperCase();return e.startsWith('BINANCE')?'BINANCE':e.startsWith('MEXC')?'MEXC':e.startsWith('BITGET')?'BITGET':null;}"
+
           new = "function signalExchangeOf(s){const e=String(s?.exchange||s?.exchangeName||s?.venue||'').toUpperCase();if(e.startsWith('BINANCE'))return 'BINANCE';if(e.startsWith('MEXC'))return 'MEXC';if(e.startsWith('BITGET'))return 'BITGET';if(String(s?.signalOrigin||'').toUpperCase()==='SHEET_IMPORT'||String(s?.source||'').toLowerCase().includes('closed-signals'))return 'BINANCE';return null;}"
+
           if old in s:
               s = s.replace(old, new, 1)
 
-          oldn = """function notifySignalEvent(title,body){
-  try{
-    if('Notification' in window && Notification.permission==='granted') new Notification(title,{body,tag:'dhatani-signal',renotify:true});
-  }catch(e){}
-}"""
-          newn = """function notifySignalEvent(title,body){
-  try{if(window.AndroidNotifications&&AndroidNotifications.notify)AndroidNotifications.notify(String(title||'Dhatani Crypto Signals'),String(body||''));}catch(e){}
-  try{if('Notification' in window && Notification.permission==='granted') new Notification(title,{body,tag:'dhatani-signal',renotify:true});}catch(e){}
-}"""
+          oldn = "function notifySignalEvent(title,body){\\n  try{\\n    if('Notification' in window && Notification.permission==='granted') new Notification(title,{body,tag:'dhatani-signal',renotify:true});\\n  }catch(e){}\\n}"
+
+          newn = "function notifySignalEvent(title,body){\\n  try{if(window.AndroidNotifications&&AndroidNotifications.notify)AndroidNotifications.notify(String(title||'Dhatani Crypto Signals'),String(body||''));}catch(e){}\\n  try{if('Notification' in window && Notification.permission==='granted') new Notification(title,{body,tag:'dhatani-signal',renotify:true});}catch(e){}\\n}"
+
           if oldn in s:
               s = s.replace(oldn, newn, 1)
+
           p.write_text(s, encoding='utf-8')
           PY
 
@@ -113,8 +110,8 @@ jobs:
                   applicationId 'com.dhatani.cryptosignals'
                   minSdk 23
                   targetSdk 35
-                  versionCode 3
-                  versionName '3.0-24x7-data-alerts'
+                  versionCode 4
+                  versionName '4.0-24x7-floating-live'
               }
           }
           EOF
@@ -128,6 +125,7 @@ jobs:
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
               <uses-permission android:name="android.permission.WAKE_LOCK"/>
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
               <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
               <application
@@ -185,12 +183,18 @@ jobs:
 
           cat > app/src/main/res/drawable/ic_stat_dhatani.xml <<'EOF'
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
-              android:width="24dp" android:height="24dp"
-              android:viewportWidth="24" android:viewportHeight="24">
-              <path android:fillColor="#FFFFFFFF"
-                    android:pathData="M3,17 L8,12 L11,15 L17,8 L21,12 L21,15 L17,12 L11,19 L8,16 L5,19 Z"/>
-              <path android:fillColor="#FFFFFFFF"
-                    android:pathData="M4,4 L4,20 L20,20 L20,18 L6,18 L6,4 Z"/>
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+
+              <path
+                  android:fillColor="#FFFFFFFF"
+                  android:pathData="M3,17 L8,12 L11,15 L17,8 L21,12 L21,15 L17,12 L11,19 L8,16 L5,19 Z"/>
+
+              <path
+                  android:fillColor="#FFFFFFFF"
+                  android:pathData="M4,4 L4,20 L20,20 L20,18 L6,18 L6,4 Z"/>
           </vector>
           EOF
 
@@ -199,16 +203,21 @@ jobs:
 
           import android.Manifest;
           import android.app.Activity;
+          import android.app.AlertDialog;
           import android.content.Intent;
           import android.content.pm.PackageManager;
+          import android.net.Uri;
           import android.os.Build;
           import android.os.Bundle;
+          import android.provider.Settings;
           import android.webkit.WebSettings;
           import android.webkit.WebView;
           import android.webkit.WebViewClient;
 
           public class MainActivity extends Activity {
+
               private WebView webView;
+
               private static final int NOTIFICATION_PERMISSION_REQUEST = 9001;
 
               @Override
@@ -219,6 +228,7 @@ jobs:
                   setContentView(webView);
 
                   WebSettings settings = webView.getSettings();
+
                   settings.setJavaScriptEnabled(true);
                   settings.setDomStorageEnabled(true);
                   settings.setDatabaseEnabled(true);
@@ -228,39 +238,114 @@ jobs:
                   settings.setUseWideViewPort(true);
 
                   if (Build.VERSION.SDK_INT >= 21) {
-                      settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+                      settings.setMixedContentMode(
+                          WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                      );
                   }
 
                   webView.setWebViewClient(new WebViewClient());
+
                   webView.loadUrl("file:///android_asset/index.html");
 
+                  requestNotificationPermission();
+
+                  requestFloatingPermission();
+
+                  startSignalMonitor();
+              }
+
+              private void requestNotificationPermission() {
+
                   if (Build.VERSION.SDK_INT >= 33 &&
-                      checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                      requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},
-                          NOTIFICATION_PERMISSION_REQUEST);
-                  } else {
-                      startSignalMonitor();
+                      checkSelfPermission(
+                          Manifest.permission.POST_NOTIFICATIONS
+                      ) != PackageManager.PERMISSION_GRANTED) {
+
+                      requestPermissions(
+                          new String[]{
+                              Manifest.permission.POST_NOTIFICATIONS
+                          },
+                          NOTIFICATION_PERMISSION_REQUEST
+                      );
                   }
               }
 
-              @Override
-              public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-                  super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-                  if (requestCode == NOTIFICATION_PERMISSION_REQUEST) {
-                      startSignalMonitor();
+              private void requestFloatingPermission() {
+
+                  if (Build.VERSION.SDK_INT >= 23 &&
+                      !Settings.canDrawOverlays(this)) {
+
+                      new AlertDialog.Builder(this)
+
+                          .setTitle("🟢 Enable Floating Live Signals")
+
+                          .setMessage(
+                              "Dhatani can show a live signal card above other apps when a new signal arrives."
+                          )
+
+                          .setPositiveButton(
+                              "Enable Floating",
+                              (d, w) -> {
+
+                                  try {
+
+                                      Intent i = new Intent(
+                                          Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                          Uri.parse(
+                                              "package:" + getPackageName()
+                                          )
+                                      );
+
+                                      startActivity(i);
+
+                                  } catch (Exception ignored) {
+
+                                      startActivity(
+                                          new Intent(
+                                              Settings.ACTION_MANAGE_OVERLAY_PERMISSION
+                                          )
+                                      );
+                                  }
+                              }
+                          )
+
+                          .setNegativeButton(
+                              "Not Now",
+                              null
+                          )
+
+                          .show();
                   }
               }
 
               private void startSignalMonitor() {
-                  Intent i = new Intent(this, SignalMonitorService.class);
-                  if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
-                  else startService(i);
+
+                  Intent i = new Intent(
+                      this,
+                      SignalMonitorService.class
+                  );
+
+                  if (Build.VERSION.SDK_INT >= 26) {
+
+                      startForegroundService(i);
+
+                  } else {
+
+                      startService(i);
+                  }
               }
 
               @Override
               public void onBackPressed() {
-                  if (webView.canGoBack()) webView.goBack();
-                  else super.onBackPressed();
+
+                  if (webView.canGoBack()) {
+
+                      webView.goBack();
+
+                  } else {
+
+                      super.onBackPressed();
+                  }
               }
           }
           EOF
@@ -273,182 +358,761 @@ jobs:
           import android.app.NotificationManager;
           import android.app.PendingIntent;
           import android.app.Service;
+
           import android.content.Intent;
+
+          import android.graphics.Color;
+          import android.graphics.PixelFormat;
+          import android.graphics.Typeface;
+
           import android.os.Build;
           import android.os.IBinder;
           import android.os.PowerManager;
+
+          import android.provider.Settings;
+
+          import android.view.Gravity;
+          import android.view.WindowManager;
+
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
 
           import org.json.JSONArray;
           import org.json.JSONObject;
 
           import java.io.BufferedReader;
           import java.io.InputStreamReader;
+
           import java.net.HttpURLConnection;
           import java.net.URL;
+
           import java.util.concurrent.Executors;
           import java.util.concurrent.ScheduledExecutorService;
           import java.util.concurrent.TimeUnit;
 
           public class SignalMonitorService extends Service {
-              private static final String CHANNEL_ID = "dhatani_signal_monitor";
+
+              private static final String CHANNEL_ID =
+                  "dhatani_signal_monitor";
+
               private static final int NOTIFICATION_ID = 2407;
+
               private static final String API =
                   "https://dhatani-cloud-bot-live-production.up.railway.app/api/signals";
 
               private ScheduledExecutorService scheduler;
+
               private PowerManager.WakeLock wakeLock;
+
               private String lastSignalId = "";
 
-              @Override public void onCreate() {
+              private WindowManager windowManager;
+
+              private LinearLayout floatingCard;
+
+              @Override
+              public void onCreate() {
+
                   super.onCreate();
+
                   createChannel();
 
-                  startForeground(NOTIFICATION_ID, buildNotification(
-                      "Dhatani 24/7 monitor is running"));
+                  startForeground(
+                      NOTIFICATION_ID,
+                      buildNotification(
+                          "Dhatani 24/7 monitor is running"
+                      )
+                  );
 
-                  PowerManager pm = (PowerManager)getSystemService(POWER_SERVICE);
+                  PowerManager pm =
+                      (PowerManager)getSystemService(POWER_SERVICE);
+
                   if (pm != null) {
-                      wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,
-                          "DhataniCryptoSignals:SignalMonitor");
+
+                      wakeLock =
+                          pm.newWakeLock(
+                              PowerManager.PARTIAL_WAKE_LOCK,
+                              "DhataniCryptoSignals:SignalMonitor"
+                          );
+
                       wakeLock.setReferenceCounted(false);
+
                       wakeLock.acquire();
                   }
 
-                  scheduler = Executors.newSingleThreadScheduledExecutor();
-                  scheduler.scheduleAtFixedRate(this::pollSignals, 0, 15, TimeUnit.SECONDS);
+                  scheduler =
+                      Executors.newSingleThreadScheduledExecutor();
+
+                  scheduler.scheduleAtFixedRate(
+                      this::pollSignals,
+                      0,
+                      15,
+                      TimeUnit.SECONDS
+                  );
               }
 
               private void createChannel() {
+
                   if (Build.VERSION.SDK_INT >= 26) {
-                      NotificationChannel ch = new NotificationChannel(
-                          CHANNEL_ID, "Dhatani Signal Alerts",
-                          NotificationManager.IMPORTANCE_HIGH);
-                      ch.setDescription("Continuous Dhatani signal monitoring and alerts");
+
+                      NotificationChannel ch =
+                          new NotificationChannel(
+                              CHANNEL_ID,
+                              "Dhatani Signal Alerts",
+                              NotificationManager.IMPORTANCE_HIGH
+                          );
+
+                      ch.setDescription(
+                          "Continuous Dhatani signal monitoring and alerts"
+                      );
+
                       ch.setShowBadge(true);
-                      NotificationManager nm = getSystemService(NotificationManager.class);
-                      if (nm != null) nm.createNotificationChannel(ch);
+
+                      NotificationManager nm =
+                          getSystemService(
+                              NotificationManager.class
+                          );
+
+                      if (nm != null) {
+
+                          nm.createNotificationChannel(ch);
+                      }
                   }
               }
 
               private PendingIntent openApp(int requestCode) {
-                  Intent open = new Intent(this, MainActivity.class);
-                  open.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+
+                  Intent open =
+                      new Intent(
+                          this,
+                          MainActivity.class
+                      );
+
+                  open.setFlags(
+                      Intent.FLAG_ACTIVITY_SINGLE_TOP |
+                      Intent.FLAG_ACTIVITY_CLEAR_TOP
+                  );
+
                   return PendingIntent.getActivity(
-                      this, requestCode, open,
+                      this,
+                      requestCode,
+                      open,
                       PendingIntent.FLAG_UPDATE_CURRENT |
-                      (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0));
+                      (
+                          Build.VERSION.SDK_INT >= 23
+                          ? PendingIntent.FLAG_IMMUTABLE
+                          : 0
+                      )
+                  );
               }
 
-              private Notification buildNotification(String text) {
-                  return new Notification.Builder(this, CHANNEL_ID)
-                      .setSmallIcon(R.drawable.ic_stat_dhatani)
-                      .setContentTitle("Dhatani Crypto Signals")
+              private Notification buildNotification(
+                  String text
+              ) {
+
+                  return new Notification.Builder(
+                      this,
+                      CHANNEL_ID
+                  )
+
+                      .setSmallIcon(
+                          R.drawable.ic_stat_dhatani
+                      )
+
+                      .setContentTitle(
+                          "Dhatani Crypto Signals"
+                      )
+
                       .setContentText(text)
+
                       .setOngoing(true)
-                      .setContentIntent(openApp(1))
-                      .setCategory(Notification.CATEGORY_SERVICE)
+
+                      .setContentIntent(
+                          openApp(1)
+                      )
+
+                      .setCategory(
+                          Notification.CATEGORY_SERVICE
+                      )
+
                       .setShowWhen(false)
+
                       .build();
               }
 
               private void pollSignals() {
-                  HttpURLConnection c = null;
-                  try {
-                      URL u = new URL(API + "?ts=" + System.currentTimeMillis());
-                      c = (HttpURLConnection)u.openConnection();
-                      c.setRequestMethod("GET");
-                      c.setConnectTimeout(8000);
-                      c.setReadTimeout(8000);
-                      c.setUseCaches(false);
-                      c.setRequestProperty("Cache-Control", "no-cache");
 
-                      int code = c.getResponseCode();
+                  HttpURLConnection c = null;
+
+                  try {
+
+                      URL u =
+                          new URL(
+                              API +
+                              "?ts=" +
+                              System.currentTimeMillis()
+                          );
+
+                      c =
+                          (HttpURLConnection)
+                          u.openConnection();
+
+                      c.setRequestMethod("GET");
+
+                      c.setConnectTimeout(8000);
+
+                      c.setReadTimeout(8000);
+
+                      c.setUseCaches(false);
+
+                      c.setRequestProperty(
+                          "Cache-Control",
+                          "no-cache"
+                      );
+
+                      int code =
+                          c.getResponseCode();
+
                       if (code < 200 || code >= 300) {
-                          updateNotification("⚠️ Backend HTTP " + code);
+
+                          updateNotification(
+                              "⚠️ Backend HTTP " + code
+                          );
+
                           return;
                       }
 
-                      BufferedReader br = new BufferedReader(
-                          new InputStreamReader(c.getInputStream()));
-                      StringBuilder sb = new StringBuilder();
+                      BufferedReader br =
+                          new BufferedReader(
+                              new InputStreamReader(
+                                  c.getInputStream()
+                              )
+                          );
+
+                      StringBuilder sb =
+                          new StringBuilder();
+
                       String line;
-                      while ((line = br.readLine()) != null) sb.append(line);
-                      br.close();
 
-                      JSONObject root = new JSONObject(sb.toString());
-                      JSONArray signals = root.optJSONArray("signals");
-                      int total = signals == null ? 0 : signals.length();
-                      int active = 0, pending = 0;
-                      String newestId = "";
-                      String newestText = "Central database connected · " + total + " signals";
+                      while (
+                          (line = br.readLine()) != null
+                      ) {
 
-                      if (signals != null && signals.length() > 0) {
-                          JSONObject newest = signals.getJSONObject(0);
-                          newestId = newest.optString("id", "");
-                          String coin = newest.optString("coin", "");
-                          String status = newest.optString("status", "");
-                          String dir = newest.optString("dir", "");
-                          newestText = coin + " · " + status +
-                              (dir.isEmpty() ? "" : " · " + dir);
-
-                          for (int i=0; i<signals.length(); i++) {
-                              JSONObject s = signals.getJSONObject(i);
-                              String st = s.optString("status", "");
-                              if ("ACTIVE".equalsIgnoreCase(st)) active++;
-                              if ("PENDING".equalsIgnoreCase(st)) pending++;
-                          }
-
-                          if (!newestId.isEmpty() && !newestId.equals(lastSignalId)
-                              && !lastSignalId.isEmpty()) {
-                              showSignalAlert(newestText);
-                          }
-                          if (!newestId.isEmpty()) lastSignalId = newestId;
+                          sb.append(line);
                       }
 
-                      updateNotification("🟢 Online · Active " + active +
-                          " · Pending " + pending + " · Total " + total);
+                      br.close();
+
+                      JSONObject root =
+                          new JSONObject(
+                              sb.toString()
+                          );
+
+                      JSONArray signals =
+                          root.optJSONArray(
+                              "signals"
+                          );
+
+                      int total =
+                          signals == null
+                          ? 0
+                          : signals.length();
+
+                      int active = 0;
+
+                      int pending = 0;
+
+                      String newestId = "";
+
+                      String newestText =
+                          "Central database connected · " +
+                          total +
+                          " signals";
+
+                      if (
+                          signals != null &&
+                          signals.length() > 0
+                      ) {
+
+                          JSONObject newest =
+                              signals.getJSONObject(0);
+
+                          newestId =
+                              newest.optString(
+                                  "id",
+                                  ""
+                              );
+
+                          String coin =
+                              newest.optString(
+                                  "coin",
+                                  ""
+                              );
+
+                          String status =
+                              newest.optString(
+                                  "status",
+                                  ""
+                              );
+
+                          String dir =
+                              newest.optString(
+                                  "dir",
+                                  ""
+                              );
+
+                          newestText =
+                              coin +
+                              " · " +
+                              status +
+                              (
+                                  dir.isEmpty()
+                                  ? ""
+                                  : " · " + dir
+                              );
+
+                          for (
+                              int i = 0;
+                              i < signals.length();
+                              i++
+                          ) {
+
+                              JSONObject s =
+                                  signals.getJSONObject(i);
+
+                              String st =
+                                  s.optString(
+                                      "status",
+                                      ""
+                                  );
+
+                              if (
+                                  "ACTIVE".equalsIgnoreCase(st)
+                              ) {
+
+                                  active++;
+                              }
+
+                              if (
+                                  "PENDING".equalsIgnoreCase(st)
+                              ) {
+
+                                  pending++;
+                              }
+                          }
+
+                          if (
+                              !newestId.isEmpty() &&
+                              !newestId.equals(lastSignalId) &&
+                              !lastSignalId.isEmpty()
+                          ) {
+
+                              showSignalAlert(
+                                  newestText
+                              );
+                          }
+
+                          if (
+                              !newestId.isEmpty()
+                          ) {
+
+                              lastSignalId =
+                                  newestId;
+                          }
+                      }
+
+                      updateNotification(
+                          "🟢 Online · Active " +
+                          active +
+                          " · Pending " +
+                          pending +
+                          " · Total " +
+                          total
+                      );
+
                   } catch (Exception e) {
-                      updateNotification("🟠 Reconnecting to central signal database…");
+
+                      updateNotification(
+                          "🟠 Reconnecting to central signal database…"
+                      );
+
                   } finally {
-                      if (c != null) c.disconnect();
+
+                      if (c != null) {
+
+                          c.disconnect();
+                      }
                   }
               }
 
-              private void updateNotification(String text) {
+              private void updateNotification(
+                  String text
+              ) {
+
                   NotificationManager nm =
-                      getSystemService(NotificationManager.class);
-                  if (nm != null) nm.notify(NOTIFICATION_ID, buildNotification(text));
+                      getSystemService(
+                          NotificationManager.class
+                      );
+
+                  if (nm != null) {
+
+                      nm.notify(
+                          NOTIFICATION_ID,
+                          buildNotification(text)
+                      );
+                  }
               }
 
-              private void showSignalAlert(String text) {
+              private void showSignalAlert(
+                  String text
+              ) {
+
                   NotificationManager nm =
-                      getSystemService(NotificationManager.class);
-                  if (nm == null) return;
+                      getSystemService(
+                          NotificationManager.class
+                      );
 
-                  Notification n = new Notification.Builder(this, CHANNEL_ID)
-                      .setSmallIcon(R.drawable.ic_stat_dhatani)
-                      .setContentTitle("🚨 Dhatani Signal Update")
-                      .setContentText(text)
-                      .setStyle(new Notification.BigTextStyle().bigText(text))
-                      .setAutoCancel(true)
-                      .setContentIntent(openApp(2))
-                      .setPriority(Notification.PRIORITY_HIGH)
-                      .build();
+                  if (nm != null) {
 
-                  nm.notify((int)(System.currentTimeMillis() & 0x7fffffff), n);
+                      Notification n =
+                          new Notification.Builder(
+                              this,
+                              CHANNEL_ID
+                          )
+
+                              .setSmallIcon(
+                                  R.drawable.ic_stat_dhatani
+                              )
+
+                              .setContentTitle(
+                                  "🚨 Dhatani Signal Update"
+                              )
+
+                              .setContentText(text)
+
+                              .setStyle(
+                                  new Notification.BigTextStyle()
+                                      .bigText(text)
+                              )
+
+                              .setAutoCancel(true)
+
+                              .setContentIntent(
+                                  openApp(2)
+                              )
+
+                              .setPriority(
+                                  Notification.PRIORITY_HIGH
+                              )
+
+                              .build();
+
+                      nm.notify(
+                          (int)(
+                              System.currentTimeMillis()
+                              & 0x7fffffff
+                          ),
+                          n
+                      );
+                  }
+
+                  showFloatingSignal(text);
               }
 
-              @Override public int onStartCommand(Intent intent, int flags, int startId) {
+              private void showFloatingSignal(
+                  final String text
+              ) {
+
+                  if (
+                      Build.VERSION.SDK_INT >= 23 &&
+                      !Settings.canDrawOverlays(this)
+                  ) {
+
+                      return;
+                  }
+
+                  final WindowManager wm =
+                      (WindowManager)
+                      getSystemService(
+                          WINDOW_SERVICE
+                      );
+
+                  windowManager = wm;
+
+                  if (wm == null) {
+
+                      return;
+                  }
+
+                  android.os.Handler h =
+                      new android.os.Handler(
+                          getMainLooper()
+                      );
+
+                  h.post(() -> {
+
+                      try {
+
+                          if (floatingCard != null) {
+
+                              try {
+
+                                  wm.removeView(
+                                      floatingCard
+                                  );
+
+                              } catch (Exception ignored) {}
+
+                              floatingCard = null;
+                          }
+
+                          LinearLayout box =
+                              new LinearLayout(
+                                  this
+                              );
+
+                          box.setOrientation(
+                              LinearLayout.VERTICAL
+                          );
+
+                          box.setPadding(
+                              24,
+                              18,
+                              24,
+                              18
+                          );
+
+                          box.setBackgroundColor(
+                              Color.rgb(
+                                  7,
+                                  17,
+                                  31
+                              )
+                          );
+
+                          TextView title =
+                              new TextView(
+                                  this
+                              );
+
+                          title.setText(
+                              "🟢 DHATANI LIVE SIGNAL"
+                          );
+
+                          title.setTextColor(
+                              Color.WHITE
+                          );
+
+                          title.setTextSize(
+                              14
+                          );
+
+                          title.setTypeface(
+                              Typeface.DEFAULT,
+                              Typeface.BOLD
+                          );
+
+                          TextView body =
+                              new TextView(
+                                  this
+                              );
+
+                          body.setText(text);
+
+                          body.setTextColor(
+                              Color.WHITE
+                          );
+
+                          body.setTextSize(
+                              15
+                          );
+
+                          body.setPadding(
+                              0,
+                              8,
+                              0,
+                              8
+                          );
+
+                          TextView close =
+                              new TextView(
+                                  this
+                              );
+
+                          close.setText(
+                              "✕  Close"
+                          );
+
+                          close.setTextColor(
+                              Color.LTGRAY
+                          );
+
+                          close.setTextSize(
+                              12
+                          );
+
+                          close.setPadding(
+                              0,
+                              6,
+                              0,
+                              2
+                          );
+
+                          box.addView(title);
+
+                          box.addView(body);
+
+                          box.addView(close);
+
+                          box.setOnClickListener(
+                              v -> {
+
+                                  try {
+
+                                      Intent i =
+                                          new Intent(
+                                              this,
+                                              MainActivity.class
+                                          );
+
+                                      i.addFlags(
+                                          Intent.FLAG_ACTIVITY_NEW_TASK |
+                                          Intent.FLAG_ACTIVITY_SINGLE_TOP |
+                                          Intent.FLAG_ACTIVITY_CLEAR_TOP
+                                      );
+
+                                      startActivity(i);
+
+                                  } catch (Exception ignored) {}
+                              }
+                          );
+
+                          close.setOnClickListener(
+                              v -> {
+
+                                  try {
+
+                                      wm.removeView(
+                                          box
+                                      );
+
+                                  } catch (Exception ignored) {}
+
+                                  if (
+                                      floatingCard == box
+                                  ) {
+
+                                      floatingCard = null;
+                                  }
+                              }
+                          );
+
+                          WindowManager.LayoutParams lp =
+                              new WindowManager.LayoutParams(
+                                  WindowManager.LayoutParams.WRAP_CONTENT,
+                                  WindowManager.LayoutParams.WRAP_CONTENT,
+
+                                  Build.VERSION.SDK_INT >= 26
+                                  ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                                  : WindowManager.LayoutParams.TYPE_PHONE,
+
+                                  WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
+                                  WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+
+                                  PixelFormat.TRANSLUCENT
+                              );
+
+                          lp.gravity =
+                              Gravity.TOP |
+                              Gravity.CENTER_HORIZONTAL;
+
+                          lp.y = 90;
+
+                          wm.addView(
+                              box,
+                              lp
+                          );
+
+                          floatingCard = box;
+
+                          h.postDelayed(
+                              () -> {
+
+                                  try {
+
+                                      wm.removeView(
+                                          box
+                                      );
+
+                                  } catch (Exception ignored) {}
+
+                                  if (
+                                      floatingCard == box
+                                  ) {
+
+                                      floatingCard = null;
+                                  }
+
+                              },
+                              20000
+                          );
+
+                      } catch (Exception ignored) {}
+                  });
+              }
+
+              @Override
+              public int onStartCommand(
+                  Intent intent,
+                  int flags,
+                  int startId
+              ) {
+
                   return START_STICKY;
               }
 
-              @Override public void onDestroy() {
-                  if (scheduler != null) scheduler.shutdownNow();
-                  if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+              @Override
+              public void onDestroy() {
+
+                  if (
+                      scheduler != null
+                  ) {
+
+                      scheduler.shutdownNow();
+                  }
+
+                  if (
+                      wakeLock != null &&
+                      wakeLock.isHeld()
+                  ) {
+
+                      wakeLock.release();
+                  }
+
+                  try {
+
+                      if (
+                          floatingCard != null &&
+                          windowManager != null
+                      ) {
+
+                          windowManager.removeView(
+                              floatingCard
+                          );
+                      }
+
+                  } catch (Exception ignored) {}
+
                   super.onDestroy();
               }
 
-              @Override public IBinder onBind(Intent intent) { return null; }
+              @Override
+              public IBinder onBind(
+                  Intent intent
+              ) {
+
+                  return null;
+              }
           }
           EOF
 
@@ -460,16 +1124,39 @@ jobs:
           import android.content.Intent;
           import android.os.Build;
 
-          public class BootReceiver extends BroadcastReceiver {
-              @Override public void onReceive(Context context, Intent intent) {
-                  String a = intent.getAction();
-                  if (Intent.ACTION_BOOT_COMPLETED.equals(a) ||
-                      Intent.ACTION_MY_PACKAGE_REPLACED.equals(a)) {
-                      Intent i = new Intent(context, SignalMonitorService.class);
-                      if (Build.VERSION.SDK_INT >= 26)
+          public class BootReceiver
+              extends BroadcastReceiver {
+
+              @Override
+              public void onReceive(
+                  Context context,
+                  Intent intent
+              ) {
+
+                  String a =
+                      intent.getAction();
+
+                  if (
+                      Intent.ACTION_BOOT_COMPLETED.equals(a) ||
+                      Intent.ACTION_MY_PACKAGE_REPLACED.equals(a)
+                  ) {
+
+                      Intent i =
+                          new Intent(
+                              context,
+                              SignalMonitorService.class
+                          );
+
+                      if (
+                          Build.VERSION.SDK_INT >= 26
+                      ) {
+
                           context.startForegroundService(i);
-                      else
+
+                      } else {
+
                           context.startService(i);
+                      }
                   }
               }
           }
@@ -481,6 +1168,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Dhatani-Crypto-Signals-APK-24x7
+          name: Dhatani-Crypto-Signals-APK-24x7-FLOATING-LIVE
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
