@@ -429,7 +429,11 @@ button,input,select{max-width:100%}
   </div>
 </div>
 
-<div id="bootNotice" style="display:none;background:#3a2410;color:#ffd98a;padding:9px 12px;font-size:11px;text-align:center">⚠️ Interface loaded, but a browser feature failed.</div><main>
+<div id="bootNotice" style="display:none;background:#3a2410;color:#ffd98a;padding:9px 12px;font-size:11px;text-align:center">⚠️ Interface loaded, but a browser feature failed.</div><div id="dhataniSyncBanner" style="position:sticky;top:0;z-index:9999;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;background:#081725;border-bottom:1px solid #294967;color:#8ea4bd;font:11px system-ui">
+  <span id="dhataniSyncText">🔄 Central signal database: connecting…</span>
+  <button type="button" onclick="pullBackendState().then(()=>{const e=document.getElementById('dhataniSyncText');if(e)e.textContent='✅ Central signal database refreshed '+new Date().toLocaleTimeString()}).catch(()=>{const e=document.getElementById('dhataniSyncText');if(e)e.textContent='❌ Central database refresh failed'})" style="padding:5px 9px">↻ Refresh</button>
+</div>
+<main>
 <div class="hero"><div><h2>Crypto Signal Command Center</h2><p>Stricter multi-timeframe confirmation with expanded chart + candlestick pattern confirmation to reduce weak setups.</p></div><button class="primary" onclick="focusCreate()">＋ Create Signal</button></div>
 
 
@@ -2313,6 +2317,8 @@ async function pullBackendState(){
     const r=await fetch(backendBase()+'/api/signals?ts='+Date.now(),{cache:'no-store'});
     if(!r.ok)throw Error('HTTP '+r.status);
     const x=await r.json();
+    const syncBanner=document.getElementById('dhataniSyncText');
+    if(syncBanner)syncBanner.textContent='🟢 Central database connected · '+new Date().toLocaleTimeString();
     if(Array.isArray(x.signals)&&x.signals.length){
       const merged=mergeSignalArrays([signals,x.signals],'backend');
       const before=JSON.stringify(signals);
@@ -2341,6 +2347,9 @@ async function enable24x7Alerts(){
     alert('✅ 24/7 TP / SL / WIN / LOSS alerts ON. Screen off par bhi push alert aa sakta hai.');
   }catch(e){alert('24/7 alerts setup error: '+(e.message||e));}
 }
+// APP DATA SYNC: pull the central Railway signal database immediately,
+ // then keep it synchronized every 5 seconds even when this page is embedded in the app.
+pullBackendState().catch(()=>{});
 setInterval(()=>{pullBackendState().catch(()=>{})},5000);
 
 
@@ -6056,51 +6065,209 @@ function saveInstagramAsManualSignal(data){
   try{if(typeof stats==='function')stats();}catch(e){}
   return s;
 }
+async function fetchWithTimeout(url, timeout=12000){
+  const ctl=new AbortController();
+  const timer=setTimeout(()=>ctl.abort(),timeout);
+  try{
+    const r=await fetch(url,{cache:'no-store',signal:ctl.signal});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return await r.json();
+  }finally{clearTimeout(timer)}
+}
+
+function normaliseCoinInput(raw){
+  let x=String(raw||'').trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
+  if(!x)return '';
+  if(x.endsWith('USDT'))return x;
+  if(x==='PI')return 'PIUSDT';
+  if(x==='MELANIA')return 'MELANIAUSDT';
+  if(x==='BTC')return 'BTCUSDT';
+  return x+'USDT';
+}
+
+async function getMultiExchangeMarket(symbol){
+  const result=[];
+  const add=(exchange,market,native,price,change,klines)=>{
+    if(Number.isFinite(Number(price)) && Array.isArray(klines) && klines.length>=10)
+      result.push({exchange,market,native,price:Number(price),change:Number(change)||0,klines});
+  };
+
+  // Binance Spot
+  try{
+    const [t,k]=await Promise.all([
+      fetchWithTimeout('https://api.binance.com/api/v3/ticker/24hr?symbol='+encodeURIComponent(symbol)),
+      fetchWithTimeout('https://api.binance.com/api/v3/klines?symbol='+encodeURIComponent(symbol)+'&interval=1h&limit=80')
+    ]);
+    add('BINANCE','SPOT',symbol,t.lastPrice,t.priceChangePercent,k);
+  }catch(e){}
+
+  // Binance Futures
+  try{
+    const [t,k]=await Promise.all([
+      fetchWithTimeout('https://fapi.binance.com/fapi/v1/ticker/24hr?symbol='+encodeURIComponent(symbol)),
+      fetchWithTimeout('https://fapi.binance.com/fapi/v1/klines?symbol='+encodeURIComponent(symbol)+'&interval=1h&limit=80')
+    ]);
+    add('BINANCE','FUTURES',symbol,t.lastPrice,t.priceChangePercent,k);
+  }catch(e){}
+
+  // MEXC Spot
+  try{
+    const [t,k]=await Promise.all([
+      fetchWithTimeout('https://api.mexc.com/api/v3/ticker/24hr?symbol='+encodeURIComponent(symbol)),
+      fetchWithTimeout('https://api.mexc.com/api/v3/klines?symbol='+encodeURIComponent(symbol)+'&interval=60m&limit=80')
+    ]);
+    add('MEXC','SPOT',symbol,t.lastPrice,t.priceChangePercent,k);
+  }catch(e){}
+
+  // MEXC Futures
+  try{
+    const native=symbol.endsWith('USDT')?symbol.replace('USDT','_USDT'):symbol;
+    const end=Math.floor(Date.now()/1000), start=end-3600*83;
+    const d=await fetchWithTimeout('https://api.mexc.com/api/v1/contract/kline/'+encodeURIComponent(native)+'?interval=Min60&start='+start+'&end='+end);
+    const x=d?.data||{};
+    const n=Math.min(
+      Array.isArray(x.time)?x.time.length:0,
+      Array.isArray(x.open)?x.open.length:0,
+      Array.isArray(x.close)?x.close.length:0,
+      Array.isArray(x.high)?x.high.length:0,
+      Array.isArray(x.low)?x.low.length:0
+    );
+    const kl=Array.from({length:n},(_,i)=>[
+      Number(x.time[i])*1000,Number(x.open[i]),Number(x.high[i]),
+      Number(x.low[i]),Number(x.close[i]),Number(x.vol?.[i]||0),Number(x.time[i])*1000
+    ]);
+    const last=kl.at(-1)?.[4];
+    const prev=kl.at(-25)?.[4]||last;
+    const ch=prev?((last-prev)/prev)*100:0;
+    if(Number.isFinite(last)&&kl.length>=10)add('MEXC','FUTURES',native,last,ch,kl);
+  }catch(e){}
+
+  // Bitget Spot
+  try{
+    const d=await fetchWithTimeout('https://api.bitget.com/api/v3/market/tickers?category=SPOT&symbol='+encodeURIComponent(symbol));
+    const t=d?.data?.[0];
+    const k=await fetchWithTimeout('https://api.bitget.com/api/v3/market/candles?category=SPOT&symbol='+encodeURIComponent(symbol)+'&granularity=1H&limit=80');
+    const kl=(k?.data||[]).map(x=>[Number(x[0]),Number(x[1]),Number(x[2]),Number(x[3]),Number(x[4]),Number(x[5]||0),Number(x[0])]);
+    add('BITGET','SPOT',symbol,t?.lastPrice,t?.price24hPcnt ? Number(t.price24hPcnt)*100 : 0,kl.reverse());
+  }catch(e){}
+
+  // Bitget Futures
+  try{
+    const d=await fetchWithTimeout('https://api.bitget.com/api/v3/market/tickers?category=USDT-FUTURES&symbol='+encodeURIComponent(symbol));
+    const t=d?.data?.[0];
+    const k=await fetchWithTimeout('https://api.bitget.com/api/v3/market/candles?category=USDT-FUTURES&symbol='+encodeURIComponent(symbol)+'&granularity=1H&limit=80');
+    const kl=(k?.data||[]).map(x=>[Number(x[0]),Number(x[1]),Number(x[2]),Number(x[3]),Number(x[4]),Number(x[5]||0),Number(x[0])]);
+    add('BITGET','FUTURES',symbol,t?.lastPrice,t?.price24hPcnt ? Number(t.price24hPcnt)*100 : 0,kl.reverse());
+  }catch(e){}
+
+  return result;
+}
+
+function buildCoinAnalysis(m){
+  const rows=m.klines.filter(x=>Array.isArray(x)&&x.length>5);
+  const closes=rows.map(x=>Number(x[4])).filter(Number.isFinite);
+  const price=Number(m.price);
+  const last20=closes.slice(-20);
+  const avg=last20.reduce((a,b)=>a+b,0)/(last20.length||1);
+  const trend=price>=avg?'BULLISH':'BEARISH';
+  const bias=Number(m.change)>=0?'LONG bias':'SHORT bias';
+  const support=Math.min(...closes.slice(-12));
+  const resistance=Math.max(...closes.slice(-12));
+  const ranges=rows.slice(-14).map(x=>Number(x[2])-Number(x[3])).filter(Number.isFinite);
+  const atr=ranges.reduce((a,b)=>a+b,0)/(ranges.length||1);
+  const risk=Math.min(Math.max(atr*1.15,price*0.006),price*0.025);
+  const entry=price;
+  const sl=trend==='BULLISH'?entry-risk:entry+risk;
+  const tp1=trend==='BULLISH'?entry+risk:entry-risk;
+  const tp2=trend==='BULLISH'?entry+risk*2:entry-risk*2;
+  const tp3=trend==='BULLISH'?entry+risk*3:entry-risk*3;
+  const leverage=instagramHealthLeverage({
+    riskPct:risk/Math.max(price,1e-12),change:m.change,trend,price,avg
+  });
+  return {price,change:Number(m.change)||0,support,resistance,entry,sl,tp1,tp2,tp3,
+          trend,bias,leverage,market:m.market,exchange:m.exchange,native:m.native};
+}
+
 async function squareSearchCoin(){
   const input=instagramElement('squareCoinInput');
-  const raw=String(input?.value||'').trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
-  if(!raw){alert('Coin symbol likhein, example: BTCUSDT');return}
-  const symbol=raw.endsWith('USDT')?raw:raw+'USDT';
+  const symbol=normaliseCoinInput(input?.value);
+  if(!symbol){alert('Coin symbol likhein, example: BTCUSDT');return}
   const result=instagramElement('squareResult'),status=instagramElement('squareStatus'),textEl=instagramElement('squareText');
-  if(result)result.style.display='block'; if(status)status.textContent='⏳ Live Binance data aur analysis tayar ho rahi hai…';
+  if(result)result.style.display='block';
+  if(status)status.textContent='⏳ Binance + MEXC + Bitget par live coin search ho rahi hai…';
+
   try{
-    const [ticker,klines]=await Promise.all([
-      fetch('https://api.binance.com/api/v3/ticker/24hr?symbol='+symbol).then(r=>{if(!r.ok)throw Error('Coin not found');return r.json()}),
-      fetch('https://api.binance.com/api/v3/klines?symbol='+symbol+'&interval=1h&limit=50').then(r=>r.json())
-    ]);
-    const price=Number(ticker.lastPrice), change=Number(ticker.priceChangePercent), high=Number(ticker.highPrice), low=Number(ticker.lowPrice), vol=Number(ticker.quoteVolume);
-    const rows=(klines||[]).filter(x=>Array.isArray(x)&&x.length>5);
-    const closes=rows.map(x=>Number(x[4])).filter(Boolean), last20=closes.slice(-20), avg=last20.reduce((a,b)=>a+b,0)/(last20.length||1);
-    const trend=price>avg?'BULLISH':'BEARISH', bias=change>=0?'LONG bias':'SHORT bias';
-    const support=Math.min(...closes.slice(-12)), resistance=Math.max(...closes.slice(-12));
-    // Risk model: keep SL close enough to be usable and targets at 1R/2R.
-    const ranges=rows.slice(-14).map(x=>Number(x[2])-Number(x[3])).filter(Number.isFinite);
-    const atr=ranges.reduce((a,b)=>a+b,0)/(ranges.length||1);
-    const minRisk=price*0.006, maxRisk=price*0.025;
-    let risk=Math.max(atr*1.15,minRisk);
-    risk=Math.min(risk,maxRisk);
-    const entry=price;
-    const sl=trend==='BULLISH'?entry-risk:entry+risk;
-    const tp1=trend==='BULLISH'?entry+risk:entry-risk;
-    const tp2=trend==='BULLISH'?entry+risk*2:entry-risk*2;
-    const tp3=trend==='BULLISH'?entry+risk*3:entry-risk*3;
-    const riskPct=risk/Math.max(price,1e-12);
-    const leverage=instagramHealthLeverage({riskPct,change,trend,price,avg});
+    const markets=await getMultiExchangeMarket(symbol);
+    if(!markets.length){
+      if(status)status.textContent='⚠️ '+symbol+' abhi Binance/MEXC/Bitget ke supported public markets mein live data ke sath nahi mila. Coin spelling check karein.';
+      return;
+    }
+
+    // Prefer futures for signal-style analysis, otherwise use spot.
+    const preferred=markets.find(x=>x.market==='FUTURES')||markets[0];
+    const data=buildCoinAnalysis(preferred);
     const fmt=n=>Number(n).toLocaleString(undefined,{maximumFractionDigits:8});
+    const exchangeLabel=preferred.exchange+' '+preferred.market;
+    const availability=[...new Set(markets.map(x=>x.exchange+' '+x.market))].join(' · ');
     const rank=coinRankBadge(symbol);
-    const text=`🏅 Coin Ranking: ${rank}\n🚨 ${symbol} LIVE MARKET ANALYSIS\n\n📊 Trend: ${trend}\n⚙️ Suggested Leverage: ${leverage}x (risk-managed)\n💰 Current Price: $${fmt(price)}\n📈 24h Change: ${change.toFixed(2)}%\n🧭 Bias: ${bias}\n\n🎯 Key Levels\n• Support: $${fmt(support)}\n• Resistance: $${fmt(resistance)}\n• Entry Reference: $${fmt(entry)}\n• Stop Loss: $${fmt(sl)}\n• TP1: $${fmt(tp1)}\n• TP2: $${fmt(tp2)}\n• TP3: $${fmt(tp3)}\n\n📌 Market note: ${liveMarketNote({price,change,support,resistance},avg,closes)}\n\n⚠️ Educational market analysis — not financial advice.\n\n#Dhatanicrytposignals #${symbol.replace('USDT','')} #Crypto #InstagramCrypto #DhataniCryptoSignals`;
+
+    const text=`🏅 Coin Ranking: ${rank}
+🚨 ${symbol} LIVE MARKET ANALYSIS
+
+🏦 Source: ${exchangeLabel}
+🌐 Available on: ${availability}
+📊 Trend: ${data.trend}
+⚙️ Suggested Leverage: ${data.leverage}x (risk-managed)
+💰 Current Price: $${fmt(data.price)}
+📈 24h Change: ${data.change.toFixed(2)}%
+🧭 Bias: ${data.bias}
+
+🎯 Key Levels
+• Support: $${fmt(data.support)}
+• Resistance: $${fmt(data.resistance)}
+• Entry Reference: $${fmt(data.entry)}
+• Stop Loss: $${fmt(data.sl)}
+• TP1: $${fmt(data.tp1)}
+• TP2: $${fmt(data.tp2)}
+• TP3: $${fmt(data.tp3)}
+
+📌 Market note: ${liveMarketNote({price:data.price,change:data.change,support:data.support,resistance:data.resistance},data.price,[data.price,data.price])}
+
+⚠️ Educational market analysis — not financial advice.
+
+#Dhatanicryptosignals #${symbol.replace('USDT','')} #Crypto`;
+
     if(textEl)textEl.textContent=text;
-    const data={symbol,price,change,high,low,vol,trend,support,resistance,entry,sl,tp1,tp2,tp3,leverage,created:stamp(),market:'FUTURES'};
-    const detail=instagramElement('instagramDetails'); if(detail)detail.innerHTML=`<div>Entry<b>$${fmt(entry)}</b></div><div>Leverage<b>${leverage}x</b></div><div>Stop Loss<b>$${fmt(sl)}</b></div><div>TP1 / TP2 / TP3<b>$${fmt(tp1)} / $${fmt(tp2)} / $${fmt(tp3)}</b></div><div>PNL %<b>0.00% · Analysis</b></div><div>Status<b>ANALYSIS READY</b></div><div>Created<b>${data.created}</b></div><div>Entry Filled<b>—</b></div><div>Signal Closed<b>—</b></div>`;
-    window.__squarePost=data;
-    const generatedManual=saveInstagramAsManualSignal(data);
-    data.manualSignalId=generatedManual?.id||null;
-    // Persist every generated Instagram signal immediately so it cannot disappear on re-render.
-    saveSquareMonitorRecord(data);
-    if(status)status.textContent='✅ Analysis ready — dynamic leverage ke sath Manual Signals mein save aur monitoring mein add ho gaya. Text share ya analysis picture download karein.';
-    drawSquareImage(data,text); drawSquareChart(data);
+    const postData={symbol,price:data.price,change:data.change,trend:data.trend,
+      support:data.support,resistance:data.resistance,entry:data.entry,sl:data.sl,
+      tp1:data.tp1,tp2:data.tp2,tp3:data.tp3,leverage:data.leverage,
+      created:stamp(),market:data.market,exchange:data.exchange};
+
+    const detail=instagramElement('instagramDetails');
+    if(detail)detail.innerHTML=
+      `<div>Exchange<b>${exchangeLabel}</b></div>`+
+      `<div>Available<b>${availability}</b></div>`+
+      `<div>Entry<b>$${fmt(data.entry)}</b></div>`+
+      `<div>Leverage<b>${data.leverage}x</b></div>`+
+      `<div>Stop Loss<b>$${fmt(data.sl)}</b></div>`+
+      `<div>TP1 / TP2 / TP3<b>$${fmt(data.tp1)} / $${fmt(data.tp2)} / $${fmt(data.tp3)}</b></div>`+
+      `<div>PNL %<b>0.00% · Analysis</b></div>`+
+      `<div>Status<b>ANALYSIS READY</b></div>`+
+      `<div>Created<b>${postData.created}</b></div>`;
+
+    window.__squarePost=postData;
+    const generatedManual=saveInstagramAsManualSignal(postData);
+    postData.manualSignalId=generatedManual?.id||null;
+    saveSquareMonitorRecord(postData);
+
+    if(status)status.textContent='✅ Analysis ready — live data found across supported exchanges. Manual Signals aur monitoring mein save ho gaya.';
+    drawSquareImage(postData,text);
+    drawSquareChart(postData);
     renderSquareMonitor();
-  }catch(e){if(status)status.textContent='❌ '+e.message+' — symbol check karein, example BTCUSDT.';}
+  }catch(e){
+    console.error('Dhatani multi-exchange analysis error',e);
+    if(status)status.textContent='⚠️ Live analysis temporarily unavailable. Retry karein — app ne fallback handling use ki hai.';
+  }
 }
 function drawSquareImage(d,text){
   const c=document.createElement('canvas');c.width=1080;c.height=1080;const x=c.getContext('2d');
@@ -7004,7 +7171,9 @@ setTimeout(renderAdaptiveIndicatorLab,150);
    const wantClosed=/\b(closed|history|completed|win loss)\b/.test(q);
    const wantTotal=/\b(total|how many|count|numbers?|summary|overview)\b/.test(q);
    const wantSettings=/\b(indicator|indicators|settings|configuration|configs?)\b/.test(q);
-   if(!(wantActive||wantPending||wantClosed||wantTotal||wantSettings)) return null;
+   if(/\b(btc|bitcoin|market|analysis|coin|price|trend)\b/.test(q)){
+     const live=all.filter(s=>String(s.status||'').toUpperCase()==='ACTIVE'||String(s.status||'').toUpperCase()==='PENDING').slice(0,10);
+     return '⚡ Instant local result\n\n📊 App market/signal snapshot\n🟢 Active: '+active.length+'\n🟡 Pending: '+pending.length+'\n🔵 Closed: '+closed.length+'\n\n'+(live.length?formatSignalList(live):'No active/pending signals are saved locally right now.')+'\n\nℹ️ For live exchange-price analysis, use Analyse Coin; it now checks Binance, MEXC and Bitget.';   }   if(!(wantActive||wantPending||wantClosed||wantTotal||wantSettings)) return null;
    if(wantSettings && !wantActive && !wantPending && !wantClosed && !wantTotal){
      const keys=['indicatorConfigs','indicatorStats','settings','dhataniSettings'];
      const parts=[];
@@ -7045,10 +7214,14 @@ setTimeout(renderAdaptiveIndicatorLab,150);
      const data=await r.json();if(!r.ok)throw new Error(data.error||('HTTP '+r.status));addMsg('ai',data.reply||'No response.');
      if(Array.isArray(data.actions)&&data.actions.length){const a=addMsg('ai','Suggested app actions:\n'+data.actions.map((x,i)=>(i+1)+'. '+x.label).join('\n'));data.actions.forEach(x=>{const wrap=document.createElement('div');wrap.className='dai-action';wrap.innerHTML='<b>'+esc(x.label)+'</b><br><small>'+esc(x.reason||'')+'</small>';if(x.safe!==false){const b=document.createElement('button');b.className='dai-btn gold';b.textContent='Apply';b.onclick=()=>applyAction(x);wrap.appendChild(b)}else{const ss=document.createElement('span');ss.className='dai-chip';ss.textContent='Manual review';wrap.appendChild(ss)}a.appendChild(wrap)});$('daiBody').scrollTop=$('daiBody').scrollHeight}
      $('daiStatus').textContent='Ready';
-   }catch(e){addMsg('ai','❌ ChatGPT connection error: '+e.message+'\n\nTap 🔐 Continue with ChatGPT and approve ChatGPT plan usage.');$('daiStatus').textContent='Connection error';}
+   }catch(e){
+   const local=fastLocalReply(text)||('⚡ Local Dhatani AI mode\n\nI could not reach the AI server right now. I can still inspect saved signals, counts, statuses and basic indicator settings locally. For full ChatGPT analysis, connect the Dhatani AI backend.');
+   addMsg('ai',local);
+   $('daiStatus').textContent='Local AI mode · server unavailable';
+ }
  }
  function applyAction(a){try{const allowed=['indicatorConfigs','dhataniSettings','signalGroups','groups','settings'];if(a.type==='set_localStorage'&&allowed.includes(a.key)){localStorage.setItem(a.key,typeof a.value==='string'?a.value:JSON.stringify(a.value));location.reload();return}if(a.type==='call_function'&&typeof window[a.function]==='function'){window[a.function](...(a.args||[]));return}if(a.type==='set_input'){const e=$(a.id);if(e){e.value=a.value;e.dispatchEvent(new Event('input',{bubbles:true}));}return}addMsg('ai','⚠️ Action not recognized; nothing was changed.')}catch(e){addMsg('ai','❌ Could not apply action: '+e.message)}}
- async function checkChatGPT(){try{const r=await fetch('/auth/status',{cache:'no-store'});const d=await r.json();const el=$('daiChatGPTStatus');if(d.connected){el.textContent='✅ ChatGPT connected: '+(d.email||'account')+' • Plan usage: '+(d.sharing?'enabled':'not enabled');$('daiStatus').textContent=d.sharing?'ChatGPT plan connected':'ChatGPT connected — plan permission not enabled'}else{el.textContent='ChatGPT plan mode: Not connected. Tap Continue with ChatGPT.'}}catch(e){$('daiChatGPTStatus').textContent='ℹ️ Start the local Dhatani server first, then open http://127.0.0.1:1455.'}}
+ async function checkChatGPT(){try{const r=await fetch('/auth/status',{cache:'no-store'});const d=await r.json();const el=$('daiChatGPTStatus');if(d.connected){el.textContent='✅ ChatGPT connected: '+(d.email||'account')+' • Plan usage: '+(d.sharing?'enabled':'not enabled');$('daiStatus').textContent=d.sharing?'ChatGPT plan connected':'ChatGPT connected — plan permission not enabled'}else{el.textContent='ChatGPT plan mode: Not connected. Tap Continue with ChatGPT.'}}catch(e){$('daiChatGPTStatus').textContent='ℹ️ AI server not connected — local Dhatani AI mode is available.'}}
  function signInChatGPT(){location.href='/auth/start'}
  window.dhataniAI={toggle(){state.open=!state.open;$('dhataniAiPanel').classList.toggle('open',state.open);if(state.open&&!state.history.length){addMsg('ai','Assalam-o-Alaikum 👋 I am Dhatani AI. I can inspect your signals, indicator settings and app state, review files/images, and suggest or apply safe app-setting changes. I will not place trades.');state.history.push(1);checkChatGPT()}},close(){state.open=false;$('dhataniAiPanel').classList.remove('open')},toggleSettings(){$('daiSettings').classList.toggle('open')},addFiles,removeFile(i){state.files.splice(i,1);renderFiles()},clearFiles(){state.files=[];renderFiles();$('daiStatus').textContent='Attachments cleared'},clearChat(){$('daiBody').innerHTML='';state.history=[]},send:()=>send(),sendCommand:t=>send(t),signInChatGPT,checkChatGPT};
  $('daiInput')?.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();send()}});
