@@ -3867,6 +3867,8 @@ async function analyzeCoinComplete(coin){
  x.finalPlan=finalExpectedMoveModel(x);
  x.expectedPct=x.finalPlan?.expectedPct||0;
  x.expectedExtendedPct=x.finalPlan?.extendedPct||0;
+ // IMPORTANT: Expected Target is ALWAYS Entry +/- Expected Move.
+ syncExpectedTargetFromEntry(x,direction);
  x.reason=finalReason(x,x.finalPlan);
  return x;
 }
@@ -4214,17 +4216,44 @@ function pumpAlertFromResult(x){
 function downloadPumpAlertForResult(x){downloadPumpAlert(pumpAlertFromResult(x));}
 function sharePumpAlertForResult(x){sharePumpAlert(pumpAlertFromResult(x));}
 function monitorPumpAlertForResult(x){upsertPumpAlerts([x]);alert(`${x.coin} pump alert monitoring mein add ho gaya.`);}
+function syncExpectedTargetFromEntry(x,type){
+  if(!x)return {plan:{},movePct:0,target:Number(x?.price||0)};
+  const plan=dynamicPumpPlan(x)||{};
+  const entry=Number(x?.entry||x?.price||x?.p||0);
+  const dir=String(plan.direction||x?.direction||type||'PUMP').toUpperCase();
+  const raw=Number(plan.expectedPct ?? x?.expectedPct ?? x?.targetPct);
+  const movePct=Number.isFinite(raw)?Math.abs(raw):0;
+  if(!(entry>0)||!(movePct>=0))return {plan,movePct,target:Number(plan.target||entry)};
+  const target=dir==='DUMP'||dir==='SHORT'
+    ? entry*(1-movePct/100)
+    : entry*(1+movePct/100);
+  // Single source of truth: Expected Target is always calculated from Entry.
+  plan.expectedPct=dir==='DUMP'||dir==='SHORT'?-movePct:movePct;
+  plan.targetPct=plan.expectedPct;
+  plan.target=target;
+  if(Number.isFinite(Number(plan.extendedPct))){
+    const ext=Math.abs(Number(plan.extendedPct));
+    plan.extendedTarget=dir==='DUMP'||dir==='SHORT'?entry*(1-ext/100):entry*(1+ext/100);
+  }
+  x.finalPlan=plan;
+  x.expectedPct=plan.expectedPct;
+  x.targetPct=plan.targetPct;
+  x.targetPrice=target;
+  return {plan,movePct,target};
+}
 function predictionRow(x,type){
  const cls=type==='PUMP'?'pump':'dump';
  const label=type==='PUMP'?'🚀 PUMP':'🔻 DUMP';
  const grade=x.grade||'C'; const gradeBase=grade==='A+'?93:grade==='A'?87:grade==='B'?76:grade==='C'?62:45; const confidence=Math.min(99,Math.max(35,Math.round(gradeBase + Math.min(6,Math.max(0,x.edge-6)))));
  const current=money(x.price);
- const target=money(x.targetPrice||dynamicPumpPlan(x)?.target||x.price);
- const rawMove=Number(x.targetPct); const movePct=Number.isFinite(rawMove)?Math.abs(rawMove):Math.abs(Number(dynamicPumpPlan(x)?.expectedPct||0));
+ // Always derive both displayed values from the same Entry + Expected Move.
+ const synced=syncExpectedTargetFromEntry(x,type);
+ const plan=synced.plan;
+ const movePct=synced.movePct;
+ const target=money(synced.target);
  const arrow=type==='PUMP'?'📈':'📉';
  const sl=type==='PUMP'?Math.max(Number(x.price||0)-Math.max(Number(x.atr15||0)*1.5,Number(x.price||0)*.03),Number(x.price||0)*.90):Math.min(Number(x.price||0)+Math.max(Number(x.atr15||0)*1.5,Number(x.price||0)*.03),Number(x.price||0)*1.10);
- const plan=type==='PUMP'?dynamicPumpPlan(x):null;
- const tiers=plan?`Expected ${plan.expectedPct.toFixed(2)}% · ${plan.confidence}% confidence · R:R ${plan.rr.toFixed(2)}`:'';
+ const tiers=plan&&Number.isFinite(Number(plan.expectedPct))?`Expected ${Math.abs(Number(plan.expectedPct)).toFixed(2)}% · ${plan.confidence}% confidence · R:R ${Number(plan.rr||0).toFixed(2)}`:'';
  const safeCoin=String(x.coin||'').replace(/'/g,"\\'");
  return `<div class="prediction-row" onclick="selectCoin('${safeCoin}')">
    <div>
@@ -4242,18 +4271,13 @@ function predictionRow(x,type){
 
 let predictionPercentGroupFilter={PUMP:'ALL',DUMP:'ALL'};
 function predictionMovePct(x,type){
-  const p=Number(x?.targetPct);
-  if(Number.isFinite(p) && p!==0)return Math.abs(p);
   const plan=dynamicPumpPlan(x)||{};
   const q=Number(plan.expectedPct);
   return Number.isFinite(q)?Math.abs(q):0;
 }
 function predictionSignedMovePct(x,type){
-  const p=Number(x?.targetPct);
-  if(Number.isFinite(p) && p!==0)return type==='DUMP'?-Math.abs(p):Math.abs(p);
-  const plan=dynamicPumpPlan(x)||{};
-  const q=Number(plan.expectedPct);
-  if(Number.isFinite(q) && q!==0)return type==='DUMP'?-Math.abs(q):Math.abs(q);
+  const q=predictionMovePct(x,type);
+  if(q!==0)return type==='DUMP'?-q:q;
   return 0;
 }
 function predictionPercentBucket(p){
@@ -4517,7 +4541,11 @@ async function scanCore(){
   $('price').textContent=money(p)+' · '+exchangeDisplayName()+' live';lastData={coin,exchange,p,e20,z,bull,bear,score:q.score,direction:q.direction==='PUMP'?'LONG':'SHORT',events:why.slice(-10),conflict:q.hardConflict,grade:q.grade,qualityScore:q.qualityScore,patterns:patterns.map(x=>x.name),rsi:r,macd:m.hist,adx:dx,vwap:vw,bollinger:bb,advanced:adv};lastScanAt=new Date();$('last').textContent=lastScanAt.toLocaleTimeString();
   const singleX={...lastData,coin,market,exchange,price:p,p,targetPrice:q.direction==='PUMP'?(Math.max(res,bb.upper)>p?Math.max(res,bb.upper):p+adv.atr15*2):(Math.min(sup,bb.lower)<p?Math.min(sup,bb.lower):p-adv.atr15*2),
     historical:{samples:0,upP75:0,upP90:0,upMax:0,downP75:0,downP90:0,downMax:0},atr15:Number(adv.atr15||0),trendAligned:q.trendAligned};
-  singleX.finalPlan=finalExpectedMoveModel(singleX);singleX.expectedPct=singleX.finalPlan?.expectedPct||0;singleX.reason=finalReason(singleX,singleX.finalPlan);
+  singleX.finalPlan=finalExpectedMoveModel(singleX);
+  singleX.expectedPct=singleX.finalPlan?.expectedPct||0;
+  // Keep single-coin analysis target synchronized with Entry + Expected Move.
+  if(singleX.finalPlan?.target>0) singleX.targetPrice=singleX.finalPlan.target;
+  singleX.reason=finalReason(singleX,singleX.finalPlan);
   if(['A+','A','B','C','D'].includes(q.grade)&&Math.abs(singleX.expectedPct)>=0.1)addAlert(q.direction==='PUMP'?'BULL':'BEAR',`${q.direction} setup · Grade ${q.grade}`,singleX.reason);
   if(q.trendAligned&&!q.hardConflict&&Math.abs(singleX.expectedPct)>=0.1)autoCreate({...singleX,deepConfirmed:true});
  }catch(e){$('price').textContent='Market data temporarily unavailable — automatic retry active';const box=$('alerts');if(box){box.querySelectorAll('.alert[data-system-alert="binance-offline"]').forEach(x=>x.remove());box.insertAdjacentHTML('afterbegin',`<div class="alert" data-system-alert="binance-offline"><div class="at"><span>Market data status</span><span class="tag neutral">INFO</span></div><p>Selected exchange data unavailable/rate-limited. No new signal created · rate-limit protection active · ${new Date().toLocaleTimeString()}</p></div>`);while(box.children.length>18)box.lastElementChild.remove();}}
