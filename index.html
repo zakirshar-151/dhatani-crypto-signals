@@ -5254,11 +5254,22 @@ function searchManualCoin(){
 
 let selectedSignalDate=null;
 let signalRenderFrame=0;
+// Exchange sub-filter for every Spot / Future / Manual status view.
+// ALL shows Binance + Bitget + MEXC together; selecting an exchange shows only that exchange.
+let signalExchangeFilter='ALL';
+function setSignalExchangeFilter(ex){
+  const v=String(ex||'ALL').toUpperCase();
+  signalExchangeFilter=['ALL','BINANCE','BITGET','MEXC'].includes(v)?v:'ALL';
+  selectedSignalDate=null;
+  horizonFilter='ALL';
+  renderSignals();
+}
 function showSignalBox(box){
  // FIX: keep the selected market/status view explicit so Pending records
  // can never leak into Future Active (or any other status view).
  const validBoxes=['spotPending','spotActive','spotClosed','futurePending','futureActive','futureClosed','manualPending','manualActive','manualClosed'];
  signalBox=validBoxes.includes(box)?box:'spotPending';
+ signalExchangeFilter='ALL';
  selectedSignalDate=null;
  horizonFilter='ALL';
  document.querySelectorAll('.signal-tab').forEach(x=>x.classList.remove('active'));
@@ -5368,7 +5379,36 @@ function renderUniversalDataCalendar(){
   }
   el.innerHTML=`<section class="universal-calendar"><div class="uc-head"><div><div class="uc-title">📅 Dhatani All-Data Calendar</div><div class="uc-sub">Ek hi calendar: Year → Month → Date. Selected date par signals, pump alerts aur Square monitor ka data ek jagah.</div></div><div class="uc-actions"><button class="compact-toggle" onclick="toggleUniversalCalendar()">${universalCalendarHidden?'👁️ Show Calendar':'🙈 Hide Calendar'}</button><button onclick="ucSetYear(${new Date().getFullYear()})">Today</button></div></div>${universalCalendarHidden?'':`<div class="uc-years">${years.map(v=>`<button class="uc-year ${v===y?'active':''}" onclick="ucSetYear(${v})">${v}</button>`).join('')}</div><div class="uc-months">${months.map(x=>{const name=new Date(2000,x.m,1).toLocaleDateString(undefined,{month:'short'});return `<button class="uc-month ${x.m===m?'active':''}" onclick="ucSetMonth(${x.m})">${name}<small>${x.has?'data':'—'}</small></button>`}).join('')}</div><div class="uc-dates"><div style="grid-column:1/-1;display:grid;grid-template-columns:repeat(7,1fr);gap:3px;color:#8ea4bd;font-size:7px;text-align:center"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>${cells}</div>${detail}`}</section>`;
 }
-function renderSignalDateExchangeSummary(){return '';}
+function renderSignalDateExchangeSummary(){
+ const allEx=['BINANCE','BITGET','MEXC'];
+ const statusOf=s=>String(s?.status||'').trim().toUpperCase();
+ const marketOf=s=>String(s?.market||s?.marketType||s?.market_type||s?.signalMarket||'FUTURES').trim().toUpperCase()==='SPOT'?'SPOT':'FUTURES';
+ const closed=s=>statusOf(s).startsWith('WIN')||statusOf(s).startsWith('LOSS');
+ const manual=s=>isManualSignal(s);
+ const selected=String(signalBox||'futureActive');
+ const wantedMarket=selected.startsWith('spot')?'SPOT':selected.startsWith('future')?'FUTURES':null;
+ const wantedStatus=selected.includes('Pending')?'PENDING':selected.includes('Active')?'ACTIVE':selected.includes('Closed')?'CLOSED':null;
+ const base=(Array.isArray(signals)?signals:[]).filter(s=>{
+   const e=signalExchangeOf(s); if(!allEx.includes(e))return false;
+   const isMan=manual(s);
+   if(selected.startsWith('manual')){ if(!isMan)return false; }
+   else { if(isMan)return false; if(marketOf(s)!==wantedMarket)return false; }
+   if(wantedStatus==='CLOSED')return closed(s);
+   return statusOf(s)===wantedStatus;
+ });
+ const countFor=ex=>base.filter(s=>signalExchangeOf(s)===ex).length;
+ const label=selected.startsWith('spot')?'Spot':selected.startsWith('future')?'Future':'Manual';
+ const statusLabel=wantedStatus==='PENDING'?'Pending':wantedStatus==='ACTIVE'?'Active':'Closed';
+ return `<div class="signal-exchange-panel">
+   <div class="signal-exchange-title">🏦 ${label} ${statusLabel} — Exchange Filter</div>
+   <div class="signal-exchange-buttons">
+     <button class="signal-exchange-btn ${signalExchangeFilter==='ALL'?'active':''}" onclick="setSignalExchangeFilter('ALL')">🌐 All Exchanges <span>${base.length}</span></button>
+     <button class="signal-exchange-btn ${signalExchangeFilter==='BINANCE'?'active':''}" onclick="setSignalExchangeFilter('BINANCE')">🟡 Binance <span>${countFor('BINANCE')}</span></button>
+     <button class="signal-exchange-btn ${signalExchangeFilter==='BITGET'?'active':''}" onclick="setSignalExchangeFilter('BITGET')">🔵 Bitget <span>${countFor('BITGET')}</span></button>
+     <button class="signal-exchange-btn ${signalExchangeFilter==='MEXC'?'active':''}" onclick="setSignalExchangeFilter('MEXC')">🟣 MEXC <span>${countFor('MEXC')}</span></button>
+   </div>
+ </div>`;
+}
 
 function renderSignalDateCalendar(list,field,label){
  if(!list.length)return '';
@@ -5677,8 +5717,12 @@ function renderSignals(){
  // selected button predicate.
  let list=Array.isArray(signals)?signals.filter(viewPredicates[signalBox]):[];
 
+ // Apply the selected exchange sub-button after the exact market/status predicate.
+ if(signalExchangeFilter!=='ALL') list=list.filter(s=>signalExchangeOf(s)===signalExchangeFilter);
+
  // Defensive final check at render time.
  list=list.filter(viewPredicates[signalBox]);
+ if(signalExchangeFilter!=='ALL') list=list.filter(s=>signalExchangeOf(s)===signalExchangeFilter);
  const field=(signalBox.includes('Closed')||signalBox==='closed')?'closed':'created';
  const label=signalBox==='manual'?'Manual signals':signalBox.startsWith('manual')?'Manual '+(signalBox.includes('Pending')?'pending':signalBox.includes('Active')?'active':'closed')+' signals':signalBox.includes('spot')?'Spot '+(signalBox.includes('Pending')?'pending':signalBox.includes('Active')?'active':'closed')+' signals':signalBox.includes('future')?'Future '+(signalBox.includes('Pending')?'pending':signalBox.includes('Active')?'active':'closed')+' signals':signalBox+' signals';
  const dateCalendar='';
@@ -7086,6 +7130,15 @@ setTimeout(renderAdaptiveIndicatorLab,150);
 #accuracyEnhancementPanel .ae-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 #accuracyEnhancementPanel button{padding:8px 10px;border:1px solid #426887;border-radius:8px;background:#17364f;color:#eaf5ff;cursor:pointer}
 #accuracyEnhancementPanel .ae-muted{color:#8ea4bd}
+
+/* Exchange sub-buttons inside every signal status view */
+.signal-exchange-panel{margin:10px 0 12px;padding:10px 11px;background:#0a1828;border:1px solid #1f3a56;border-radius:14px;box-shadow:0 4px 12px rgba(0,0,0,.12)}
+.signal-exchange-title{font-size:13px;font-weight:800;color:#b9cbe0;margin-bottom:8px}
+.signal-exchange-buttons{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}
+.signal-exchange-btn{min-height:40px;padding:7px 9px;border:1px solid #294d70;border-radius:10px;background:#10243a;color:#dce9f5;font-weight:800;font-size:12px;cursor:pointer;white-space:nowrap}
+.signal-exchange-btn span{display:inline-block;margin-left:4px;color:#9fb5cb;font-weight:900}
+.signal-exchange-btn.active{border-color:#f4c64e;background:#18304b;color:#fff;box-shadow:0 0 0 1px rgba(244,198,78,.18)}
+@media(max-width:700px){.signal-exchange-buttons{grid-template-columns:1fr 1fr}.signal-exchange-btn{font-size:11px;min-height:42px}.signal-exchange-title{font-size:12px}}
 </style>
 <div id="accuracyEnhancementPanel">
   <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap">
