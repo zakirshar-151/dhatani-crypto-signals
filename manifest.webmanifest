@@ -1,0 +1,12 @@
+{
+  "name": "Dhatani Crypto Signals Pro",
+  "short_name": "Dhatani Signals",
+  "description": "Dhatani Crypto Signals Pro — Trading Signals & Analytics Platform",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#07111f",
+  "theme_color": "#07111f",
+  "icons": []
+}

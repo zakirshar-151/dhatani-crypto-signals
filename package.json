@@ -1,0 +1,22 @@
+{
+  "name": "dhatani-crypto-signals-desktop",
+  "version": "4.0.0",
+  "description": "Dhatani Crypto Signals Pro desktop app with 24/7 cloud alerts",
+  "main": "electron/main.cjs",
+  "author": "Dhatani Crypto Signals",
+  "license": "MIT",
+  "scripts": { "dist:win": "electron-builder --win nsis portable --x64" },
+  "devDependencies": { "electron": "44.5.1", "electron-builder": "26.15.3" },
+  "build": {
+    "appId": "com.dhatani.cryptosignals",
+    "productName": "Dhatani Crypto Signals",
+    "asar": true,
+    "files": ["index.html", "electron/**/*", "package.json"],
+    "directories": { "output": "release" },
+    "win": {
+      "target": [ { "target": "nsis", "arch": ["x64"] }, { "target": "portable", "arch": ["x64"] } ],
+      "artifactName": "Dhatani-Crypto-Signals-${version}-${arch}.${ext}"
+    },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true, "createStartMenuShortcut": true }
+  }
+}
